@@ -1,0 +1,227 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: >
+  A template to setup webapp cluster etc...
+
+Parameters:
+  WebappName:
+    Description: The web app name  
+    Type: String
+    Default: webapp-sample
+
+  VPCIPV4Cidr:
+    Type: String
+    Default: 10.10.0.0/16
+    Description: VPC IPV4 CIDR
+
+  PublicSubnetsCidr:
+    Type: CommaDelimitedList
+    Default: "10.10.0.0/24,10.10.1.0/24"
+
+  PrivateSubnetsCidr:
+    Type: CommaDelimitedList
+    Default: "10.10.10.0/24,10.10.11.0/24"
+
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VPCIPV4Cidr
+      EnableDnsSupport: "true"
+      EnableDnsHostnames: "true"
+      Tags:
+        - Key: Name
+          Value: !Join
+            - "-"
+            - - !Ref WebappName
+              - "vpc"
+        - Key: "ecs/vpc"
+          Value: ""
+
+  PubSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Select
+        - 0
+        - !Ref PublicSubnetsCidr
+      AvailabilityZone: !Select
+        - 0
+        - Fn::GetAZs: !Ref "AWS::Region"
+      MapPublicIpOnLaunch: "true"
+      Tags:
+        - Key: Name
+          Value: !Sub "${WebappName}-pub-subnet1"
+        - Key: "ecs/alb"
+          Value: ""
+
+  PubSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Select
+        - 1
+        - !Ref PublicSubnetsCidr
+      AvailabilityZone: !Select
+        - 1
+        - Fn::GetAZs: !Ref "AWS::Region"
+      # for public subnet
+      MapPublicIpOnLaunch: "true"
+      Tags:
+        - Key: Name
+          Value: !Sub "${WebappName}-pub-subnet2"
+        - Key: "ecs/alb"
+          Value: ""
+
+  PriSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Select
+        - "0"
+        - !Ref PrivateSubnetsCidr
+      AvailabilityZone: !Select
+        - "0"
+        - !GetAZs ""
+      Tags:
+        - Key: Name
+          Value: !Sub "${WebappName}-pri-subnet1"
+        - Key: "ecs/service"
+          Value: ""
+
+  ## Subnet 2
+  PriSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Select
+        - "1"
+        - !Ref PrivateSubnetsCidr
+      AvailabilityZone: !Select
+        - "1"
+        - !GetAZs ""
+      Tags:
+        - Key: Name
+          Value: !Sub "${WebappName}-pri-subnet2"
+        - Key: "ecs/service"
+          Value: ""
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${WebappName}-igw"
+
+  VPCAttachInternetGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # NAT Gateway 1
+  NATGateway1:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt
+        - NATGateway1EIP
+        - AllocationId
+      SubnetId: !Ref PubSubnet1
+  # NAT Gateway1 EIP
+  NATGateway1EIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  # NAT Gateway 2
+  NATGateway2:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt
+        - NATGateway2EIP
+        - AllocationId
+      SubnetId: !Ref PubSubnet2
+  # NAT Gateway2 EIP
+  NATGateway2EIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  PrivateRouteTable1:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${WebappName}-private-rtb1"
+
+  # Private Route1 NAT
+  PrivateRouteTable1RouteNAT:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable1
+      DestinationCidrBlock: "0.0.0.0/0"
+      NatGatewayId: !Ref NATGateway1
+
+  PrivateRouteTable2:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${WebappName}-private-rtb2"
+
+  # Private Route1 NAT
+  PrivateRouteTable2RouteNAT:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable2
+      DestinationCidrBlock: "0.0.0.0/0"
+      NatGatewayId: !Ref NATGateway2
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${WebappName}-pub-rtb"
+
+  PublicRouteTableRouteIGW:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: "0.0.0.0/0"
+      GatewayId: !Ref InternetGateway
+
+  PubSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PubSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PubSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PubSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  PriSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PriSubnet1
+      RouteTableId: !Ref PrivateRouteTable1
+
+  PriSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PriSubnet2
+      RouteTableId: !Ref PrivateRouteTable2
+
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub "${WebappName}-cluster"
+      Tags:
+        - Key: "ecs/cluster"
+          Value: ""

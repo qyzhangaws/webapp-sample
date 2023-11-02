@@ -1,0 +1,198 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: >
+  A template to setup webapp service etc...
+
+Parameters:
+  WebappName:
+    Description: Web app name
+    Type: String
+    Default: webapp-sample
+
+  ALBHealthCheck:
+    Description: The webapp ALB health check
+    Type: String
+    Default: "/"
+
+  VPCId:
+    Description: The webapp VPC id
+    Type: String
+
+  WebappPriSubnets:
+    Type: CommaDelimitedList
+    Default: ""
+
+  WebappPubSubnets:
+    Type: CommaDelimitedList
+    Default: ""
+
+  WebappImage:
+    Type: String
+    Default: ""
+
+  WebappECSCluster:
+    Description: The webapp sample ECS cluster
+    Type: String
+    Default: webapp-sample-cluster
+
+Resources:
+  WebappECSService:
+    DependsOn: WebappALBPubHttpListener
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !Ref WebappECSCluster
+      LaunchType: "FARGATE"
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: "DISABLED"
+          SecurityGroups:
+            - !Ref WebappServiceSecurityGroup
+          Subnets:
+            - !Select [ "0", !Ref WebappPriSubnets ]
+            - !Select [ "1", !Ref WebappPriSubnets ]
+      ServiceName: !Sub "${WebappName}-service"
+      DesiredCount: 1
+      HealthCheckGracePeriodSeconds: 100
+      LoadBalancers:
+        - ContainerName: !Sub "${WebappName}-container"
+          ContainerPort: 8080
+          TargetGroupArn: !Ref WebappALBTargetGroup
+      TaskDefinition: !Ref WebappTaskDef
+  WebappServiceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${WebappName}-service-sg"
+      GroupDescription: Security Group for webapp sample service
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: "8080"
+          ToPort: "8080"
+          SourceSecurityGroupId: !Ref WebappALBSecurityGroup
+      VpcId: !Ref VPCId
+
+  WebappECSServiceTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: webaapp ecs service task role
+      Path: /
+      RoleName: !Sub "${WebappName}-ecs-task-role"
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ecs-tasks.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub "${WebappName}-ecs-task-access"
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecs:UpdateService
+                  - ecs:DescribeServices
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - cloudwatch:DescribeAlarms
+                  - cloudwatch:PutMetricAlarm
+                Resource: "*"
+
+  WebappECSServiceTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: service ecs service task execution role
+      RoleName: !Sub "${WebappName}-ecs-task-execution-role"
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ecs-tasks.amazonaws.com
+            Action:
+              - "sts:AssumeRole"
+      Path: /
+      Policies:
+        - PolicyName: !Sub "${WebappName}-ecs-task-execution-access"
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+  WebappTaskDef:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "${WebappName}-sample-task"
+      RequiresCompatibilities:
+        - "FARGATE"
+      NetworkMode: "awsvpc"
+      TaskRoleArn: !GetAtt WebappECSServiceTaskRole.Arn
+      ExecutionRoleArn: !GetAtt WebappECSServiceTaskExecutionRole.Arn
+      Cpu: "1024"
+      Memory: "2048"
+      ContainerDefinitions:
+        - Name: !Sub "${WebappName}-container"
+          Image: !Ref WebappImage
+          PortMappings:
+            - HostPort: 8080
+              Protocol: tcp
+              ContainerPort: 8080
+
+  WebappALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internet-facing
+      Type: "application"
+      Name: !Sub "${WebappName}-alb"
+      SecurityGroups:
+        - !Ref WebappALBSecurityGroup
+      Subnets:
+        - !Select [ "0", !Ref WebappPubSubnets ]
+        - !Select [ "1", !Ref WebappPubSubnets ]
+
+  WebappALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${WebappName}-alb-sg"
+      GroupDescription: Security Group for Sample ALB
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: "80"
+          ToPort: "80"
+          CidrIp: "0.0.0.0/0"
+      VpcId: !Ref VPCId
+
+  WebappALBPubHttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      Protocol: HTTP
+      Port: 80
+      LoadBalancerArn: !Ref WebappALB
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref WebappALBTargetGroup
+
+  WebappALBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${WebappName}-sample-tg"
+      Port: 8080
+      Protocol: "HTTP"
+      HealthCheckIntervalSeconds: 20
+      HealthCheckPath: !Ref ALBHealthCheck
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 10
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 2
+      TargetType: ip
+      VpcId: !Ref VPCId

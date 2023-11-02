@@ -1,0 +1,27 @@
+version: 0.2
+env:
+  shell: bash
+
+phases:
+  pre_build:
+    commands:
+      - echo "Enter pre_build stage on `date`..."
+      - echo "Preparing repository tags..."
+      - AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text)
+      - SOURCE_COMMIT_HASH=$(echo ${CODEBUILD_RESOLVED_SOURCE_VERSION})
+      - IMAGE_TAG_COMMIT_HASH=commit-$(echo ${SOURCE_COMMIT_HASH} | cut -c 1-8)
+      - echo "Preparing Amazon ECR stage..."
+      - ECR_REPOSITORY_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${IMAGE_REPO_NAME}"
+      - aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com
+  build:
+    commands:
+      - echo "Enter build phase on `date`..."
+      - echo "Build docker image..."
+      - docker build -t $ECR_REPOSITORY_URI:latest .
+      - docker tag $ECR_REPOSITORY_URI:latest $ECR_REPOSITORY_URI:$IMAGE_TAG_COMMIT_HASH
+  post_build:
+    commands:
+      - echo "Enter post_build phase on `date`..."
+      - echo "Pushing the docker images..."
+      - docker push $ECR_REPOSITORY_URI:$IMAGE_TAG_COMMIT_HASH
+      - docker push $ECR_REPOSITORY_URI:latest

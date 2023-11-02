@@ -1,0 +1,41 @@
+version: 0.2
+env:
+  shell: bash
+
+phases:
+  build:
+    commands:
+      - echo "Enter build phase on `date`..."
+      - echo "To determine image tag with commit id..."
+      - cp ecs-service.yaml packaged.yaml
+      - echo "Generate packaged cloudformation template configuration..."
+      - vpc_id=$(aws ec2 describe-vpcs --filters Name=tag-key,Values="ecs/vpc" --query "Vpcs[0].VpcId" --output text)
+      - alb_subnet_ids=$(aws ec2 describe-subnets --filters Name=tag-key,Values="ecs/alb" --query "Subnets[*].SubnetId" --output text | tr [:space:] ',')
+      - service_subnet_ids=$(aws ec2 describe-subnets --filters Name=tag-key,Values="ecs/service" --query "Subnets[*].SubnetId" --output text | tr [:space:] ',')
+      - clusters=$(aws ecs list-clusters --query 'clusterArns[*]' --output text)
+      - cluster=""
+      - |
+        for item in $clusters; do 
+            item_tag=$(aws ecs list-tags-for-resource --resource-arn ${item} --query 'tags[?key==`ecs/cluster`]' --output text)
+            if [[ -n "${item_tag}" ]]; then 
+                cluster=${item}
+                break
+            fi 
+        done
+      - vpc_id_parameter="\"VPCId\":\"${vpc_id}\""
+      - alb_subnet_ids_parameter="\"WebappPubSubnets\":\"${alb_subnet_ids}\""
+      - service_subnet_ids_parameter="\"WebappPriSubnets\":\"${service_subnet_ids}\""
+      - cluster_parameter="\"WebappECSCluster\":\"${cluster}\""
+      - image_uri_digest=$(jq -r '.ImageURI' ${CODEBUILD_SRC_DIR_ECRSourceArtifact}/imageDetail.json)
+      - image_uri=$(echo $image_uri_digest | cut -d "@" -f 1)
+      - image_tags=$(jq -r '.ImageTags[]' ${CODEBUILD_SRC_DIR_ECRSourceArtifact}/imageDetail.json)
+      - image_tag_commit="latest"
+      - for item in ${image_tags}; do if [[ "${item}" == "commit-"* ]]; then image_tag_commit=$item; break; fi; done
+      - image_parameter="\"WebappImage\":\"${image_uri}:${image_tag_commit}\""
+      - template_configuration="{ \"Parameters\":{$vpc_id_parameter, $alb_subnet_ids_parameter, $service_subnet_ids_parameter, $cluster_parameter, $image_parameter}}"
+      - echo "${template_configuration}" > packaged.configuration.json
+
+artifacts:
+  files:
+    - packaged.yaml
+    - packaged.configuration.json

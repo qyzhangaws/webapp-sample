@@ -1,0 +1,36 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: ECR replication permission in destination account
+
+Parameters:
+  WebappName:
+    Description: Webapp sample name
+    Type: String
+    Default: webapp-sample
+
+  ECRReplicationSourceAWSAccount:
+    Description: The ECR Replication destination AWS Account
+    Type: String
+
+Resources:
+  ECRPrivateRegistryReplicationPolicy:
+    Type: AWS::ECR::RegistryPolicy
+    Properties:
+      PolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: ReplicateRegistryPolicy
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${ECRReplicationSourceAWSAccount}:root"
+            Action:
+              - "ecr:CreateRepository"
+              - "ecr:ReplicateImage"
+            Resource: !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/*"
+
+  ECRRepositoryWebapp:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Ref WebappName
+      ImageScanningConfiguration:
+        ScanOnPush: true

@@ -1,0 +1,168 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: webapp-sample source account template
+
+Parameters:
+  WebappName:
+    Description: Webapp name
+    Type: String
+    Default: webapp-sample
+
+  CodeCommitRepositoryName:
+    Description: The web app codecommit repository name
+    Type: String
+    Default: webapp-sample
+
+  CodebuildBuildSpecPath:
+    Description: The codebuild buildspec.yml file
+    Type: String
+    Default: buildspec.yml
+
+  ECRReplicationDestinationAWSAccount:
+    Description: The ECR Replication destination AWS Account
+    Type: String
+
+  ECRReplicationDestinationRegion:
+    Description: The ECR replication destination region
+    Type: String
+
+Resources:
+  CodeBuildWebappProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Ref WebappName
+      Description: The webapp codebuild project example
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Cache:
+        Modes:
+          - LOCAL_SOURCE_CACHE
+          - LOCAL_DOCKER_LAYER_CACHE
+        Type: LOCAL
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:5.0
+        Type: LINUX_CONTAINER
+        PrivilegedMode: true
+        EnvironmentVariables:
+          - Name: IMAGE_REPO_NAME
+            Value: !Ref WebappName
+
+      ServiceRole: !Ref CodeBuildWebappIAMRole
+      Source:
+        BuildSpec: !Ref CodebuildBuildSpecPath
+        GitCloneDepth: 0
+        Location: !Sub "https://git-codecommit.${AWS::Region}.amazonaws.com/v1/repos/${CodeCommitRepositoryName}"
+        Type: CODECOMMIT
+      SourceVersion: refs/heads/master
+
+  CodeBuildWebappIAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: "/"
+      RoleName: !Sub "codebuild-${WebappName}-service-role1"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - !Ref CodeBuildWebappIAMAccessPolicy
+
+  CodeBuildWebappIAMAccessPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: "codebuild iam access policy example"
+      ManagedPolicyName: !Sub "codebuild-${WebappName}-service-access1"
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - "codecommit:GitPull"
+              - "ecr:GetAuthorizationToken"
+              - "ecr:BatchGetImage"
+              - "ecr:InitiateLayerUpload"
+              - "ecr:UploadLayerPart"
+              - "ecr:CompleteLayerUpload"
+              - "ecr:BatchCheckLayerAvailability"
+              - "ecr:GetDownloadUrlForLayer"
+              - "ecr:PutImage"
+              - "logs:*"
+              - "codebuild:*"
+            Resource: "*"
+
+  EventBridgeCodeBuildWebappTriggerRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "codebuild-${WebappName}-trigger"
+      Description: The event rule to trigger codebuild example
+      EventPattern:
+        source:
+          - aws.codecommit
+        detail-type:
+          - CodeCommit Repository State Change
+        detail:
+          repositoryName:
+            - webapp-sample
+          referenceType:
+            - branch
+          referenceName:
+            - master
+      State: ENABLED
+      Targets:
+        - Id: !Sub "codebuild-${WebappName}-project"
+          Arn: !GetAtt CodeBuildWebappProject.Arn
+          RoleArn: !GetAtt EventBridgeCodeBuildWebappTriggerIAMRole.Arn
+
+  EventBridgeCodeBuildWebappTriggerIAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "eventbridge-codebuild-${WebappName}-trigger-role"
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: "events.amazonaws.com"
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - !Ref EventBridgeCodeBuildWebappTriggerIAMAccessPolicy
+      Path: /
+
+  EventBridgeCodeBuildWebappTriggerIAMAccessPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: "codebuild iam access policy example"
+      ManagedPolicyName: !Sub "codebuild-${WebappName}-trigger-access1"
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - 'codebuild:StartBuild'
+            Resource:
+              - !Sub "arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:project/${WebappName}"
+
+  ECRRepositoryWebapp:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Ref WebappName
+      ImageScanningConfiguration:
+        ScanOnPush: true
+
+  ECRReplicationConfiguration:
+    Type: AWS::ECR::ReplicationConfiguration
+    Properties:
+      ReplicationConfiguration:
+        Rules:
+          - Destinations:
+              - Region: !Ref ECRReplicationDestinationRegion
+                RegistryId: !Ref ECRReplicationDestinationAWSAccount
+            RepositoryFilters:
+              - Filter: !Ref WebappName
+                FilterType: PREFIX_MATCH
